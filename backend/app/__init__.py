@@ -79,14 +79,26 @@ def create_app():
     mail.init_app(app)
     
     # CORS - Allow frontend requests (configured to handle all routes and errors)
+    # Get frontend URL from environment or use defaults
+    frontend_url = os.getenv('FRONTEND_URL', 'http://localhost:5173')
+    
+    # Build allowed origins list
+    allowed_origins = [
+        frontend_url,
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "https://digital-workflows.onrender.com",  # Production frontend
+    ]
+    
+    # Add any additional frontend URLs from environment
+    if os.getenv('ADDITIONAL_FRONTEND_URLS'):
+        additional_urls = os.getenv('ADDITIONAL_FRONTEND_URLS').split(',')
+        allowed_origins.extend([url.strip() for url in additional_urls])
+    
     CORS(app, 
          resources={
              r"/api/*": {
-                 "origins": [
-                     os.getenv('FRONTEND_URL', 'http://localhost:5173'),
-                     "http://localhost:3000",
-                     "http://127.0.0.1:5173"
-                 ],
+                 "origins": allowed_origins,
                  "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
                  "allow_headers": ["Content-Type", "Authorization"]
              }
