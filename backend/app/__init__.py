@@ -95,38 +95,77 @@ def create_app():
         additional_urls = os.getenv('ADDITIONAL_FRONTEND_URLS').split(',')
         allowed_origins.extend([url.strip() for url in additional_urls])
     
+    # Configure CORS with more permissive settings
     CORS(app, 
          resources={
              r"/api/*": {
                  "origins": allowed_origins,
-                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-                 "allow_headers": ["Content-Type", "Authorization"]
+                 "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
+                 "allow_headers": ["Content-Type", "Authorization", "X-Requested-With"],
+                 "expose_headers": ["Content-Type"],
+                 "supports_credentials": True,
+                 "max_age": 3600
              }
          },
-         supports_credentials=True)
+         supports_credentials=True,
+         automatic_options=True)
     
-    # After request handler to ensure CORS headers are always included
+    # After request handler to ensure CORS headers are always included in ALL responses
     @app.after_request
     def after_request(response):
-        """Ensure CORS headers are included in all responses"""
-        # CORS middleware should handle this, but this ensures it works for errors too
+        """Ensure CORS headers are included in all responses, including errors"""
+        from flask import request
+        
+        # Get the origin from the request
+        origin = request.headers.get('Origin')
+        
+        # Check if origin is in allowed list
+        if origin and origin in allowed_origins:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+            response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+            response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+            response.headers['Access-Control-Max-Age'] = '3600'
+        
         return response
+    
+    # Handle OPTIONS preflight requests
+    @app.before_request
+    def handle_preflight():
+        from flask import request
+        if request.method == "OPTIONS":
+            from flask import Response
+            response = Response()
+            origin = request.headers.get('Origin')
+            if origin and origin in allowed_origins:
+                response.headers['Access-Control-Allow-Origin'] = origin
+                response.headers['Access-Control-Allow-Credentials'] = 'true'
+                response.headers['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS, PATCH'
+                response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-Requested-With'
+                response.headers['Access-Control-Max-Age'] = '3600'
+            return response
     
     # Error handler for ConnectionError to ensure CORS headers are included
     @app.errorhandler(ConnectionError)
     def handle_connection_error(e):
         """Handle ConnectionError with CORS headers"""
-        from flask import jsonify
-        return jsonify({
+        from flask import jsonify, request
+        response = jsonify({
             'error': 'Database connection error',
             'message': str(e)
-        }), 500
+        })
+        # Add CORS headers
+        origin = request.headers.get('Origin')
+        if origin and origin in allowed_origins:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response, 500
     
     # Error handler for 500 errors to ensure CORS headers are included
     @app.errorhandler(500)
     def handle_500_error(e):
         """Handle 500 errors with CORS headers"""
-        from flask import jsonify
+        from flask import jsonify, request
         import traceback
         
         error_message = str(e) if str(e) else "Internal server error"
@@ -134,15 +173,55 @@ def create_app():
         # In debug mode, include traceback
         if app.config.get('DEBUG'):
             traceback_str = traceback.format_exc()
-            return jsonify({
+            response = jsonify({
                 'error': error_message,
                 'traceback': traceback_str
-            }), 500
+            })
+        else:
+            response = jsonify({
+                'error': 'Internal server error',
+                'message': 'An unexpected error occurred. Please try again later.'
+            })
         
-        return jsonify({
-            'error': 'Internal server error',
-            'message': 'An unexpected error occurred. Please try again later.'
-        }), 500
+        # Add CORS headers
+        origin = request.headers.get('Origin')
+        if origin and origin in allowed_origins:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+        
+        return response, 500
+    
+    # Error handler for 404 errors
+    @app.errorhandler(404)
+    def handle_404_error(e):
+        """Handle 404 errors with CORS headers"""
+        from flask import jsonify, request
+        response = jsonify({
+            'error': 'Not found',
+            'message': 'The requested resource was not found.'
+        })
+        # Add CORS headers
+        origin = request.headers.get('Origin')
+        if origin and origin in allowed_origins:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response, 404
+    
+    # Error handler for 400 errors
+    @app.errorhandler(400)
+    def handle_400_error(e):
+        """Handle 400 errors with CORS headers"""
+        from flask import jsonify, request
+        response = jsonify({
+            'error': 'Bad request',
+            'message': str(e) if str(e) else 'Invalid request'
+        })
+        # Add CORS headers
+        origin = request.headers.get('Origin')
+        if origin and origin in allowed_origins:
+            response.headers['Access-Control-Allow-Origin'] = origin
+            response.headers['Access-Control-Allow-Credentials'] = 'true'
+        return response, 400
     
     # Verify MongoDB connection
     try:
