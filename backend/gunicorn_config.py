@@ -9,11 +9,13 @@ bind = f"0.0.0.0:{os.getenv('PORT', '5000')}"
 backlog = 2048
 
 # Worker processes
-workers = int(os.getenv('WEB_CONCURRENCY', multiprocessing.cpu_count() * 2 + 1))
+# For Render.com free tier, use fewer workers to avoid resource issues
+workers = int(os.getenv('WEB_CONCURRENCY', min(4, multiprocessing.cpu_count() * 2 + 1)))
 worker_class = 'sync'
 worker_connections = 1000
-timeout = 120  # Increased timeout for email sending operations
+timeout = 120  # Increased timeout for email sending operations (2 minutes)
 keepalive = 5
+graceful_timeout = 30  # Time to wait for workers to finish before killing them
 
 # Logging
 accesslog = '-'

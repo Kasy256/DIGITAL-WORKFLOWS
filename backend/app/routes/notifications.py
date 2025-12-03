@@ -2,6 +2,7 @@
 Notification routes - Send receipts via Email and SMS
 """
 import os
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app import mongo
@@ -10,6 +11,7 @@ from app.models.user import User
 from app.services.email_service import EmailService
 from app.services.sms_service import SMSService
 
+logger = logging.getLogger(__name__)
 notifications_bp = Blueprint('notifications', __name__)
 
 
@@ -27,47 +29,63 @@ def send_email(receipt_id):
         "email": "override@example.com"  # Override customer email
     }
     """
-    current_user_id = get_jwt_identity()
-    data = request.get_json() or {}
-    
-    # Get receipt
-    receipt_model = Receipt(mongo)
-    receipt = receipt_model.find_by_id(receipt_id, current_user_id)
-    
-    if not receipt:
-        return jsonify({'error': 'Receipt not found'}), 404
-    
-    # Override email if provided
-    if data.get('email'):
-        receipt['customer_email'] = data['email']
-    
-    if not receipt.get('customer_email'):
-        return jsonify({'error': 'No email address available for this receipt'}), 400
-    
-    # Get business info for branding
-    user_model = User(mongo)
-    user = user_model.find_by_id(current_user_id)
-    business_info = {
-        'business_name': user.get('business_name', 'EReceipt'),
-        'business_address': user.get('business_address', ''),
-    } if user else None
-    
-    # Send email
-    success, message = EmailService.send_receipt_email(receipt, business_info)
-    
-    if success:
-        # Mark receipt as email sent
-        receipt_model.mark_email_sent(receipt_id)
+    try:
+        current_user_id = get_jwt_identity()
+        data = request.get_json() or {}
         
-        return jsonify({
-            'success': True,
-            'message': message,
-            'sent_to': receipt['customer_email']
-        }), 200
-    else:
+        # Get receipt
+        receipt_model = Receipt(mongo)
+        receipt = receipt_model.find_by_id(receipt_id, current_user_id)
+        
+        if not receipt:
+            logger.warning(f"Receipt not found: {receipt_id} for user {current_user_id}")
+            return jsonify({'error': 'Receipt not found'}), 404
+        
+        # Override email if provided
+        if data.get('email'):
+            receipt['customer_email'] = data['email']
+        
+        if not receipt.get('customer_email'):
+            logger.warning(f"No email address for receipt {receipt_id}")
+            return jsonify({'error': 'No email address available for this receipt'}), 400
+        
+        # Get business info for branding
+        user_model = User(mongo)
+        user = user_model.find_by_id(current_user_id)
+        business_info = {
+            'business_name': user.get('business_name', 'EReceipt'),
+            'business_address': user.get('business_address', ''),
+        } if user else None
+        
+        # Send email
+        logger.info(f"Attempting to send email for receipt {receipt_id} to {receipt['customer_email']}")
+        success, message = EmailService.send_receipt_email(receipt, business_info)
+        
+        if success:
+            # Mark receipt as email sent
+            try:
+                receipt_model.mark_email_sent(receipt_id)
+            except Exception as e:
+                logger.warning(f"Failed to mark email as sent for receipt {receipt_id}: {str(e)}")
+            
+            logger.info(f"Email sent successfully for receipt {receipt_id}")
+            return jsonify({
+                'success': True,
+                'message': message,
+                'sent_to': receipt['customer_email']
+            }), 200
+        else:
+            logger.error(f"Failed to send email for receipt {receipt_id}: {message}")
+            return jsonify({
+                'success': False,
+                'error': message
+            }), 500
+            
+    except Exception as e:
+        logger.error(f"Unexpected error in send_email route: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
-            'error': message
+            'error': f'An unexpected error occurred: {str(e)}'
         }), 500
 
 

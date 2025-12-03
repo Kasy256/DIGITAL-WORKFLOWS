@@ -3,6 +3,7 @@ Email Service - Free email sending using Gmail SMTP or Flask-Mail
 """
 import os
 import smtplib
+import socket
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
@@ -10,6 +11,9 @@ from email import encoders
 from flask import current_app
 from flask_mail import Message
 from app import mail
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class EmailService:
@@ -44,34 +48,66 @@ class EmailService:
             html_body = EmailService._build_receipt_html(receipt, business_info)
             text_body = EmailService._build_receipt_text(receipt, business_info)
             
+            # Check if email service is configured
+            mail_username = current_app.config.get('MAIL_USERNAME') or os.getenv('MAIL_USERNAME')
+            mail_password = current_app.config.get('MAIL_PASSWORD') or os.getenv('MAIL_PASSWORD')
+            
+            if not mail_username or not mail_password:
+                logger.error("Email service not configured: Missing MAIL_USERNAME or MAIL_PASSWORD")
+                return False, "Email service not configured. Please check your environment variables."
+            
             # Try Flask-Mail first
-            if current_app.config.get('MAIL_USERNAME'):
-                return EmailService._send_via_flask_mail(
-                    to_email=receipt['customer_email'],
-                    subject=subject,
-                    html_body=html_body,
-                    text_body=text_body
-                )
-            else:
-                return False, "Email service not configured"
+            return EmailService._send_via_flask_mail(
+                to_email=receipt['customer_email'],
+                subject=subject,
+                html_body=html_body,
+                text_body=text_body
+            )
                 
+        except socket.timeout as e:
+            logger.error(f"Email send timeout: {str(e)}")
+            return False, f"Email sending timed out. Please try again later."
+        except smtplib.SMTPException as e:
+            logger.error(f"SMTP error: {str(e)}")
+            return False, f"Email service error: {str(e)}"
         except Exception as e:
+            logger.error(f"Unexpected error sending email: {str(e)}", exc_info=True)
             return False, f"Failed to send email: {str(e)}"
     
     @staticmethod
     def _send_via_flask_mail(to_email, subject, html_body, text_body):
-        """Send email using Flask-Mail"""
+        """Send email using Flask-Mail with timeout handling"""
         try:
+            # Set socket timeout for SMTP operations (30 seconds)
+            socket.setdefaulttimeout(30)
+            
             msg = Message(
                 subject=subject,
                 recipients=[to_email],
                 html=html_body,
                 body=text_body
             )
+            
+            # Send email with timeout protection
             mail.send(msg)
+            logger.info(f"Email sent successfully to {to_email}")
             return True, "Email sent successfully"
+            
+        except socket.timeout as e:
+            logger.error(f"Email send timeout for {to_email}: {str(e)}")
+            return False, f"Email sending timed out. The SMTP server took too long to respond."
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"SMTP authentication failed: {str(e)}")
+            return False, "Email authentication failed. Please check your email credentials."
+        except smtplib.SMTPException as e:
+            logger.error(f"SMTP error for {to_email}: {str(e)}")
+            return False, f"Email service error: {str(e)}"
         except Exception as e:
-            return False, f"Flask-Mail error: {str(e)}"
+            logger.error(f"Unexpected Flask-Mail error for {to_email}: {str(e)}", exc_info=True)
+            return False, f"Failed to send email: {str(e)}"
+        finally:
+            # Reset socket timeout to default
+            socket.setdefaulttimeout(None)
     
     @staticmethod
     def _send_via_smtp(to_email, subject, html_body, text_body):
@@ -101,15 +137,26 @@ class EmailService:
             msg.attach(part1)
             msg.attach(part2)
             
-            # Connect and send
-            with smtplib.SMTP(smtp_server, smtp_port) as server:
+            # Connect and send with timeout
+            with smtplib.SMTP(smtp_server, smtp_port, timeout=30) as server:
                 server.starttls()
                 server.login(username, password)
                 server.sendmail(sender, to_email, msg.as_string())
             
+            logger.info(f"Email sent successfully via SMTP to {to_email}")
             return True, "Email sent successfully via SMTP"
             
+        except socket.timeout as e:
+            logger.error(f"SMTP timeout for {to_email}: {str(e)}")
+            return False, f"Email sending timed out. The SMTP server took too long to respond."
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"SMTP authentication failed: {str(e)}")
+            return False, "Email authentication failed. Please check your email credentials."
+        except smtplib.SMTPException as e:
+            logger.error(f"SMTP error for {to_email}: {str(e)}")
+            return False, f"Email service error: {str(e)}"
         except Exception as e:
+            logger.error(f"Unexpected SMTP error for {to_email}: {str(e)}", exc_info=True)
             return False, f"SMTP error: {str(e)}"
     
     @staticmethod
